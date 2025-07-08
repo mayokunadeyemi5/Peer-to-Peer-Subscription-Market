@@ -7,6 +7,10 @@
 (define-constant ERR_INVALID_DURATION (err u105))
 (define-constant ERR_CANNOT_SUBSCRIBE_OWN_CONTENT (err u106))
 
+(define-constant ERR_GIFT_NOT_FOUND (err u107))
+(define-constant ERR_GIFT_ALREADY_CLAIMED (err u108))
+(define-constant ERR_CANNOT_GIFT_TO_SELF (err u109))
+
 (define-map content-items
   { content-id: uint }
   {
@@ -256,4 +260,121 @@
     )
     none
   )
+)
+
+
+(define-map gift-subscriptions
+  { gift-id: uint }
+  {
+    gifter: principal,
+    recipient: principal,
+    content-id: uint,
+    duration-blocks: uint,
+    message: (string-ascii 200),
+    created-at: uint,
+    is-claimed: bool
+  }
+)
+
+(define-data-var next-gift-id uint u1)
+
+(define-public (gift-subscription (recipient principal) (content-id uint) (duration-blocks uint) (message (string-ascii 200)))
+  (let
+    (
+      (content-info (unwrap! (map-get? content-items { content-id: content-id }) ERR_NOT_FOUND))
+      (gift-id (var-get next-gift-id))
+      (current-block stacks-block-height)
+      (total-cost (* (get price content-info) (/ duration-blocks u144)))
+      (platform-fee (/ (* total-cost (var-get platform-fee-percentage)) u100))
+      (creator-payment (- total-cost platform-fee))
+      (creator (get creator content-info))
+    )
+    (asserts! (get is-active content-info) ERR_NOT_FOUND)
+    (asserts! (> duration-blocks u0) ERR_INVALID_DURATION)
+    (asserts! (not (is-eq tx-sender recipient)) ERR_CANNOT_GIFT_TO_SELF)
+    (asserts! (not (is-eq recipient creator)) ERR_CANNOT_SUBSCRIBE_OWN_CONTENT)
+    
+    (try! (stx-transfer? total-cost tx-sender (as-contract tx-sender)))
+    (try! (as-contract (stx-transfer? creator-payment tx-sender creator)))
+    
+    (map-set gift-subscriptions
+      { gift-id: gift-id }
+      {
+        gifter: tx-sender,
+        recipient: recipient,
+        content-id: content-id,
+        duration-blocks: duration-blocks,
+        message: message,
+        created-at: current-block,
+        is-claimed: false
+      }
+    )
+    
+    (map-set creator-earnings
+      { creator: creator }
+      {
+        total-earned: (+ creator-payment 
+          (default-to u0 (get total-earned (map-get? creator-earnings { creator: creator }))))
+      }
+    )
+    
+    (var-set next-gift-id (+ gift-id u1))
+    (ok gift-id)
+  )
+)
+
+(define-public (claim-gift (gift-id uint))
+  (let
+    (
+      (gift-info (unwrap! (map-get? gift-subscriptions { gift-id: gift-id }) ERR_GIFT_NOT_FOUND))
+      (current-block stacks-block-height)
+      (expires-at (+ current-block (get duration-blocks gift-info)))
+      (content-id (get content-id gift-info))
+    )
+    (asserts! (is-eq tx-sender (get recipient gift-info)) ERR_NOT_AUTHORIZED)
+    (asserts! (not (get is-claimed gift-info)) ERR_GIFT_ALREADY_CLAIMED)
+    
+    (map-set gift-subscriptions
+      { gift-id: gift-id }
+      (merge gift-info { is-claimed: true })
+    )
+    
+    (map-set subscriptions
+      { subscriber: tx-sender, content-id: content-id }
+      {
+        expires-at: expires-at,
+        purchased-at: current-block,
+        amount-paid: u0
+      }
+    )
+    
+    (ok expires-at)
+  )
+)
+
+(define-read-only (get-gift-info (gift-id uint))
+  (map-get? gift-subscriptions { gift-id: gift-id })
+)
+
+(define-read-only (get-pending-gifts (recipient principal))
+  (filter is-unclaimed-gift (map get-gift-with-id (list-gifts)))
+)
+
+(define-private (is-unclaimed-gift (gift-entry {gift-id: uint, gift-info: (optional {gifter: principal, recipient: principal, content-id: uint, duration-blocks: uint, message: (string-ascii 200), created-at: uint, is-claimed: bool})}))
+  (match (get gift-info gift-entry)
+    gift-data (and (not (get is-claimed gift-data)) (is-eq (get recipient gift-data) tx-sender))
+    false
+  )
+)
+
+(define-private (get-gift-with-id (gift-id uint))
+  { gift-id: gift-id, gift-info: (map-get? gift-subscriptions { gift-id: gift-id }) }
+)
+
+(define-private (list-gifts)
+  (map uint-to-gift (list u1 u2 u3 u4 u5 u6 u7 u8 u9 u10))
+)
+
+(define-private (uint-to-gift (n uint))
+  n
 )
