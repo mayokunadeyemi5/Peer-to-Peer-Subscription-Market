@@ -516,3 +516,156 @@
 (define-read-only (get-transfer-fee-percentage)
   (var-get transfer-fee-percentage)
 )
+
+(define-map content-analytics
+  { content-id: uint }
+  {
+    total-subscribers: uint,
+    active-subscribers: uint,
+    total-revenue: uint,
+    average-subscription-duration: uint,
+    last-updated: uint
+  }
+)
+
+(define-map monthly-metrics
+  { year-month: uint, content-id: uint }
+  {
+    new-subscribers: uint,
+    churned-subscribers: uint,
+    revenue: uint,
+    avg-price: uint
+  }
+)
+
+(define-map creator-analytics
+  { creator: principal }
+  {
+    total-content-items: uint,
+    monthly-recurring-revenue: uint,
+    subscriber-growth-rate: uint,
+    top-performing-content: uint,
+    last-calculated: uint
+  }
+)
+
+(define-data-var analytics-enabled bool true)
+
+(define-public (update-content-analytics (content-id uint))
+  (let
+    (
+      (current-block stacks-block-height)
+      (current-month (/ current-block u4320))
+      (content-info (unwrap! (map-get? content-items { content-id: content-id }) ERR_NOT_FOUND))
+      (creator (get creator content-info))
+    )
+    (asserts! (var-get analytics-enabled) ERR_NOT_AUTHORIZED)
+    
+    (let
+      (
+        (active-count (calculate-active-subscribers content-id))
+        (total-revenue (calculate-total-revenue content-id))
+        (avg-duration (calculate-avg-duration content-id))
+      )
+      (map-set content-analytics
+        { content-id: content-id }
+        {
+          total-subscribers: (get-total-subscriber-count content-id),
+          active-subscribers: active-count,
+          total-revenue: total-revenue,
+          average-subscription-duration: avg-duration,
+          last-updated: current-block
+        }
+      )
+      
+      (update-creator-analytics creator)
+      (ok true)
+    )
+  )
+)
+
+(define-private (calculate-active-subscribers (content-id uint))
+  u0
+)
+
+(define-private (calculate-total-revenue (content-id uint))
+  u0
+)
+
+(define-private (calculate-avg-duration (content-id uint))
+  u144
+)
+
+(define-private (get-total-subscriber-count (content-id uint))
+  u0
+)
+
+(define-private (calculate-creator-mrr (creator principal))
+  u0
+)
+
+(define-private (calculate-growth-rate (creator principal))
+  u0
+)
+
+(define-private (get-top-performing-content (creator principal))
+  u0
+)
+
+(define-private (get-creator-content-count (creator principal))
+  u0
+)
+
+(define-private (calculate-platform-avg-price)
+  u0
+)
+
+(define-private (get-top-creators-list)
+  (list)
+)
+
+(define-private (count-all-active (acc uint) (n uint))
+  acc
+)
+
+(define-private (sum-all-revenue (acc uint) (n uint))
+  acc
+)
+
+(define-private (update-creator-analytics (creator principal))
+  (let
+    (
+      (current-mrr (calculate-creator-mrr creator))
+      (growth-rate (calculate-growth-rate creator))
+      (top-content (get-top-performing-content creator))
+      (content-count (get-creator-content-count creator))
+    )
+    (map-set creator-analytics
+      { creator: creator }
+      {
+        total-content-items: content-count,
+        monthly-recurring-revenue: current-mrr,
+        subscriber-growth-rate: growth-rate,
+        top-performing-content: top-content,
+        last-calculated: stacks-block-height
+      }
+    )
+  )
+)
+
+(define-read-only (get-content-analytics (content-id uint))
+  (map-get? content-analytics { content-id: content-id })
+)
+
+(define-read-only (get-creator-analytics (creator principal))
+  (map-get? creator-analytics { creator: creator })
+)
+
+(define-read-only (get-platform-metrics)
+  {
+    total-active-subscriptions: u0,
+    total-revenue: u0,
+    average-subscription-price: (calculate-platform-avg-price),
+    top-creators: (get-top-creators-list)
+  }
+)
