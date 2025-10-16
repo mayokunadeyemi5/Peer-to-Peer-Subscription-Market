@@ -669,3 +669,89 @@
     top-creators: (get-top-creators-list)
   }
 )
+
+(define-constant ERR_INVALID_DISCOUNT (err u114))
+
+(define-map content-discounts
+  { content-id: uint }
+  {
+    percentage-off: uint,
+    min-duration-blocks: uint,
+    valid-until-block: uint,
+    is-active: bool
+  }
+)
+
+(define-public (configure-discount (content-id uint) (percentage-off uint) (min-duration-blocks uint) (valid-until-block uint))
+  (let
+    (
+      (content-info (unwrap! (map-get? content-items { content-id: content-id }) ERR_NOT_FOUND))
+    )
+    (asserts! (is-eq tx-sender (get creator content-info)) ERR_NOT_AUTHORIZED)
+    (asserts! (<= percentage-off u100) ERR_INVALID_DISCOUNT)
+    (asserts! (> valid-until-block stacks-block-height) ERR_INVALID_DISCOUNT)
+    
+    (map-set content-discounts
+      { content-id: content-id }
+      {
+        percentage-off: percentage-off,
+        min-duration-blocks: min-duration-blocks,
+        valid-until-block: valid-until-block,
+        is-active: true
+      }
+    )
+    (ok true)
+  )
+)
+
+(define-public (deactivate-discount (content-id uint))
+  (let
+    (
+      (content-info (unwrap! (map-get? content-items { content-id: content-id }) ERR_NOT_FOUND))
+      (discount-info (unwrap! (map-get? content-discounts { content-id: content-id }) ERR_NOT_FOUND))
+    )
+    (asserts! (is-eq tx-sender (get creator content-info)) ERR_NOT_AUTHORIZED)
+    
+    (map-set content-discounts
+      { content-id: content-id }
+      (merge discount-info { is-active: false })
+    )
+    (ok true)
+  )
+)
+
+(define-private (apply-discount (base-cost uint) (content-id uint) (duration-blocks uint))
+  (match (map-get? content-discounts { content-id: content-id })
+    discount-info
+    (if (and 
+          (get is-active discount-info)
+          (> (get valid-until-block discount-info) stacks-block-height)
+          (>= duration-blocks (get min-duration-blocks discount-info)))
+      (- base-cost (/ (* base-cost (get percentage-off discount-info)) u100))
+      base-cost
+    )
+    base-cost
+  )
+)
+
+(define-read-only (get-discount-info (content-id uint))
+  (map-get? content-discounts { content-id: content-id })
+)
+
+(define-read-only (calculate-discounted-cost (content-id uint) (duration-blocks uint))
+  (match (map-get? content-items { content-id: content-id })
+    content-info
+    (let
+      (
+        (base-cost (* (get price content-info) (/ duration-blocks u144)))
+        (discounted-cost (apply-discount base-cost content-id duration-blocks))
+      )
+      (some { 
+        original-cost: base-cost,
+        discounted-cost: discounted-cost,
+        savings: (- base-cost discounted-cost)
+      })
+    )
+    none
+  )
+)
