@@ -16,6 +16,9 @@
 (define-constant ERR_CANNOT_TRANSFER_TO_SELF (err u112))
 (define-constant ERR_INSUFFICIENT_TIME_REMAINING (err u113))
 
+(define-constant ERR_INVALID_REFERRAL (err u115))
+(define-constant ERR_REFERRAL_EXPIRED (err u116))
+
 (define-data-var next-offer-id uint u1)
 (define-data-var transfer-fee-percentage uint u2)
 
@@ -754,4 +757,100 @@
     )
     none
   )
+)
+
+
+(define-map referral-codes
+  { code-hash: (buff 32) }
+  {
+    creator: principal,
+    content-id: uint,
+    reward-percentage: uint,
+    valid-until: uint,
+    max-uses: uint,
+    current-uses: uint,
+    is-active: bool
+  }
+)
+
+(define-map referral-earnings
+  { referrer: principal }
+  { total-earned: uint }
+)
+
+(define-public (create-referral-code (content-id uint) (code-hash (buff 32)) (reward-percentage uint) (valid-until uint) (max-uses uint))
+  (let
+    (
+      (content-info (unwrap! (map-get? content-items { content-id: content-id }) ERR_NOT_FOUND))
+    )
+    (asserts! (is-eq tx-sender (get creator content-info)) ERR_NOT_AUTHORIZED)
+    (asserts! (<= reward-percentage u30) ERR_INVALID_REFERRAL)
+    (asserts! (> valid-until stacks-block-height) ERR_INVALID_REFERRAL)
+    (asserts! (> max-uses u0) ERR_INVALID_REFERRAL)
+    
+    (map-set referral-codes
+      { code-hash: code-hash }
+      {
+        creator: tx-sender,
+        content-id: content-id,
+        reward-percentage: reward-percentage,
+        valid-until: valid-until,
+        max-uses: max-uses,
+        current-uses: u0,
+        is-active: true
+      }
+    )
+    (ok true)
+  )
+)
+
+(define-public (purchase-with-referral (content-id uint) (duration-blocks uint) (referral-code (buff 32)))
+  (let
+    (
+      (content-info (unwrap! (map-get? content-items { content-id: content-id }) ERR_NOT_FOUND))
+      (referral-info (unwrap! (map-get? referral-codes { code-hash: referral-code }) ERR_INVALID_REFERRAL))
+      (current-block stacks-block-height)
+      (total-cost (* (get price content-info) (/ duration-blocks u144)))
+      (platform-fee (/ (* total-cost (var-get platform-fee-percentage)) u100))
+      (referral-reward (/ (* total-cost (get reward-percentage referral-info)) u100))
+      (creator-payment (- (- total-cost platform-fee) referral-reward))
+      (creator (get creator content-info))
+      (referrer (get creator referral-info))
+    )
+    (asserts! (get is-active content-info) ERR_NOT_FOUND)
+    (asserts! (get is-active referral-info) ERR_INVALID_REFERRAL)
+    (asserts! (is-eq content-id (get content-id referral-info)) ERR_INVALID_REFERRAL)
+    (asserts! (> (get valid-until referral-info) current-block) ERR_REFERRAL_EXPIRED)
+    (asserts! (< (get current-uses referral-info) (get max-uses referral-info)) ERR_INVALID_REFERRAL)
+    (asserts! (> duration-blocks u0) ERR_INVALID_DURATION)
+    
+    (try! (stx-transfer? total-cost tx-sender (as-contract tx-sender)))
+    (try! (as-contract (stx-transfer? creator-payment tx-sender creator)))
+    (try! (as-contract (stx-transfer? referral-reward tx-sender referrer)))
+    
+    (map-set subscriptions
+      { subscriber: tx-sender, content-id: content-id }
+      { expires-at: (+ current-block duration-blocks), purchased-at: current-block, amount-paid: total-cost }
+    )
+    
+    (map-set referral-codes
+      { code-hash: referral-code }
+      (merge referral-info { current-uses: (+ (get current-uses referral-info) u1) })
+    )
+    
+    (map-set referral-earnings
+      { referrer: referrer }
+      { total-earned: (+ referral-reward (default-to u0 (get total-earned (map-get? referral-earnings { referrer: referrer })))) }
+    )
+    
+    (ok (+ current-block duration-blocks))
+  )
+)
+
+(define-read-only (get-referral-info (code-hash (buff 32)))
+  (map-get? referral-codes { code-hash: code-hash })
+)
+
+(define-read-only (get-referral-earnings (referrer principal))
+  (default-to { total-earned: u0 } (map-get? referral-earnings { referrer: referrer }))
 )
